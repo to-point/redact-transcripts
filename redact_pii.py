@@ -85,9 +85,17 @@ _STREET_TYPES = (
 # Replacement is "123 Main Street"; everything after (city/state/zip) is untouched.
 ADDRESS = re.compile(
     r'\b\d+,?\s+'                                      # house number (optional comma after)
-    r'(?:(?:East|West|North|South|NE|NW|SE|SW)\s+)?'  # optional direction
+    r'(?:(?:East|West|North|South|E|W|N|S|NE|NW|SE|SW)\s+)?'  # optional direction
     r'\w[\w\s]*?'                                      # street name (lazy, word-start)
     r'\s+(?:' + _STREET_TYPES + r')\b',               # whitespace required before type
+    re.IGNORECASE,
+)
+
+# Prompt-line fallback for spoken/dashed house number + street name without explicit street type.
+# Example: "verify your property address? 1-4-0-8-5 Stoudridge, Lawrenceville, Georgia, ..."
+ADDRESS_INLINE_AFTER_PROMPT = re.compile(
+    r'(\b(?:property|home|mailing)?\s*address\?\s+)'
+    r'((?:\d-){3,}\d\s+[A-Za-z][A-Za-z\'-]*(?:\s+[A-Za-z][A-Za-z\'-]*){0,3})',
     re.IGNORECASE,
 )
 
@@ -113,6 +121,15 @@ SSN_LAST4_CONTEXT = re.compile(
     r'|'
     # "XXXX for social"
     r'\b(?<!-)(\d{4})\s+for\s+social\b'
+    r'|'
+    # "M-D-YYYY-XXXX" or "MM-DD-YYYY-XXXX" in social context
+    r'\b\d{1,2}-\d{1,2}-\d{4}-(\d{4})\b'
+    r'|'
+    # Compact "DOB+SSN4" token: MMDDYY + XXXX, or similar 6+4 digits
+    r'\b\d{6}(\d{4})\b'
+    r'|'
+    # Spoken last-4 as dash-separated digits in social context: "... social ... 9-1-5-4"
+    r'social(?:\s+security)?(?:\s+number)?(?:[\w\s,?!.:-]*?)(\d-\d-\d-\d)\b'
     r')',
     re.IGNORECASE,
 )
@@ -123,9 +140,10 @@ def _redact_ssn_last4_context(line: str, log: list, filename: str, lineno: int) 
     """Replace the 4-digit SSN in contextual matches, preserving surrounding text."""
     def replacer(m):
         # Find which capture group matched the 4 digits
-        digits = m.group(1) or m.group(2) or m.group(3)
+        digits = m.group(1) or m.group(2) or m.group(3) or m.group(4) or m.group(5) or m.group(6)
         original = m.group(0)
-        replaced = original.replace(digits, '1234', 1)
+        replacement_digits = '1-2-3-4' if '-' in digits else '1234'
+        replaced = original.replace(digits, replacement_digits, 1)
         log.append({'file': filename, 'line': lineno, 'type': 'ssn_last4',
                     'original': original, 'replacement': replaced})
         return replaced
@@ -161,6 +179,19 @@ def redact_line(line: str, log: list, filename: str, lineno: int) -> str:
 
     # Address
     line = ADDRESS.sub(log_and_replace('address', '123 Main Street'), line)
+    def address_inline_replace(m):
+        original = m.group(0)
+        replaced = m.group(1) + '123 Main Street'
+        log.append({
+            'file': filename,
+            'line': lineno,
+            'type': 'address_inline',
+            'original': original,
+            'replacement': replaced,
+        })
+        return replaced
+
+    line = ADDRESS_INLINE_AFTER_PROMPT.sub(address_inline_replace, line)
 
     # SSN — full format first, then contextual last-4
     line = SSN_FULL.sub(ssn_full_replace, line)
@@ -172,6 +203,12 @@ def redact_line(line: str, log: list, filename: str, lineno: int) -> str:
 # Multi-line spoken email fallback
 
 _EMAIL_PROMPT = re.compile(r'\b(?:e-?mail)\b.*\baddress\b', re.IGNORECASE)
+_ADDRESS_PROMPT = re.compile(r'\b(?:property|home|mailing)?\s*address\b', re.IGNORECASE)
+_ADDRESS_STOP = re.compile(
+    r'\b(?:social|ssn|date\s+of\s+birth|dob|e-?mail|phone|full\s+name)\b',
+    re.IGNORECASE,
+)
+_SSN_PROMPT = re.compile(r'\b(?:last\s+(?:four|4).{0,40}social|social\s+security)\b', re.IGNORECASE)
 
 
 def _extract_spoken_text(line: str) -> str:
@@ -197,6 +234,68 @@ def _is_likely_email_fragment(text: str) -> bool:
     if re.fullmatch(r'[a-z0-9._%+-]{2,30}', s) and re.search(r'[0-9._%+-]', s):
         return True
     return False
+
+
+def _is_likely_address_fragment(text: str) -> bool:
+    s = text.strip().lower().rstrip('.')
+    if not s:
+        return False
+    if re.search(r'\bcity\s+is\b|\bstate\b|\bzip\b|\bpostal\b', s):
+        return False
+    if re.search(r'^\d+\b', s):
+        return True
+    if re.search(r'^(?:\d-){2,}\d\b', s):
+        return True
+    if re.search(r'\b(?:street|st|avenue|ave|road|rd|drive|dr|court|ct|lane|ln|boulevard|blvd)\b', s):
+        return True
+    if re.search(r'\b[a-z](?:-[a-z]){1,}\b', s):
+        return True
+    if re.search(r'\bas in\b', s):
+        return True
+    return False
+
+
+def _redact_multiline_address_fragments(lines: list[str], log: list, filename: str) -> list[str]:
+    """
+    If a line asks for address confirmation, redact likely street-address fragments
+    that may be split over multiple lines.
+    """
+    out = lines[:]
+    i = 0
+    while i < len(out):
+        content = _extract_spoken_text(out[i])
+        if not _ADDRESS_PROMPT.search(content):
+            i += 1
+            continue
+
+        for j in range(i + 1, min(i + 7, len(out))):
+            frag = _extract_spoken_text(out[j]).strip()
+            if not frag:
+                break
+            if _ADDRESS_STOP.search(frag):
+                break
+            if re.search(r'\bcity\s+is\b|\bstate\b|\bzip\b|\bpostal\b', frag, re.IGNORECASE):
+                break
+            if not _is_likely_address_fragment(frag):
+                continue
+
+            redacted_line = re.sub(r'(\[[^\]]+\]\s*).*$',
+                                   r'\g<1>123 Main Street',
+                                   out[j].rstrip('\n'))
+            if out[j].endswith('\n'):
+                redacted_line += '\n'
+            if redacted_line != out[j]:
+                log.append({
+                    'file': filename,
+                    'line': j + 1,
+                    'type': 'address_multiline',
+                    'original': out[j].rstrip('\n'),
+                    'replacement': redacted_line.rstrip('\n'),
+                })
+                out[j] = redacted_line
+        i += 1
+
+    return out
 
 
 def _redact_multiline_email_fragments(lines: list[str], log: list, filename: str) -> list[str]:
@@ -243,6 +342,49 @@ def _redact_multiline_email_fragments(lines: list[str], log: list, filename: str
     return out
 
 
+def _redact_multiline_ssn_fragments(lines: list[str], log: list, filename: str) -> list[str]:
+    """
+    If a line asks for social security last-4, redact likely SSN last-4 values
+    on the next line (e.g., "February 19, 1973, 5257.").
+    """
+    out = lines[:]
+    i = 0
+    while i < len(out):
+        content = _extract_spoken_text(out[i])
+        if not _SSN_PROMPT.search(content):
+            i += 1
+            continue
+
+        for j in range(i + 1, min(i + 3, len(out))):
+            frag = _extract_spoken_text(out[j]).strip()
+            if not frag:
+                break
+            # Replace trailing 4-digit token (or dashed spoken digits) only.
+            new_frag = re.sub(r'(\d{4})([.?!]?)\s*$', r'1234\2', frag)
+            if new_frag == frag:
+                new_frag = re.sub(r'(\d-\d-\d-\d)([.?!]?)\s*$', r'1-2-3-4\2', frag)
+            if new_frag == frag:
+                continue
+
+            redacted_line = re.sub(r'^(\[[^\]]+\]\s*).*$',
+                                   r'\g<1>' + new_frag,
+                                   out[j].rstrip('\n'))
+            if out[j].endswith('\n'):
+                redacted_line += '\n'
+            if redacted_line != out[j]:
+                log.append({
+                    'file': filename,
+                    'line': j + 1,
+                    'type': 'ssn_multiline',
+                    'original': out[j].rstrip('\n'),
+                    'replacement': redacted_line.rstrip('\n'),
+                })
+                out[j] = redacted_line
+        i += 1
+
+    return out
+
+
 # File processing
 def process_file(src: Path, dst: Path, log: list) -> None:
     with open(src, encoding='utf-8', errors='replace') as f:
@@ -252,7 +394,9 @@ def process_file(src: Path, dst: Path, log: list) -> None:
         redact_line(line, log, src.name, i + 1)
         for i, line in enumerate(lines)
     ]
+    redacted = _redact_multiline_address_fragments(redacted, log, src.name)
     redacted = _redact_multiline_email_fragments(redacted, log, src.name)
+    redacted = _redact_multiline_ssn_fragments(redacted, log, src.name)
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     with open(dst, 'w', encoding='utf-8') as f:
