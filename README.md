@@ -11,13 +11,12 @@ Keep the parts that make a transcript understandable and referenceable, and norm
 - Keep useful context:
   - person names (when needed for transcript flow)
   - city/state
-  - non-sensitive conversational details
-- Remove or mask sensitive PII:
+  - age
+- Mask (write over) sensitive PII:
   - email addresses
   - Social Security numbers (full SSN or last-4 in SSN context)
   - street addresses
 
-The goal is to preserve narrative value for demos and QA while preventing exposure of directly identifying contact/identity data.
 
 ## What gets replaced
 
