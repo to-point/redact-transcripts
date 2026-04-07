@@ -32,6 +32,13 @@ The goal is to preserve narrative value for demos and QA while preventing exposu
 - Redacted transcripts: `call-transcriptions-redacted/*.txt`
 - Audit log: `call-transcriptions-redacted/_redaction_log.csv`
 
+## Setup
+
+- Place your source transcript `.txt` files in a folder named `call-transcriptions` at the repo root (same directory as `redact_pii.py`).
+- The script writes results to `call-transcriptions-redacted` (created automatically if needed).
+- Keep the default folder names unless you also update `INPUT_DIR` / `OUTPUT_DIR` in `redact_pii.py`.
+- If `call-transcriptions` is missing or has no `.txt` files, the script has nothing to process.
+
 ## Run
 
 ```bash
