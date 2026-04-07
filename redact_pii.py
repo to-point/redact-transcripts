@@ -27,13 +27,11 @@ OUTPUT_DIR = Path(__file__).parent / "call-transcriptions-redacted"
 # Common TLDs spoken in calls
 _TLD = r'(?:com|net|org|edu|gov|io|co|us)'
 
-# Well-known provider names (catches emails dropped without "at", e.g. "gallegospeet.sbcglobal.net")
 # NOTE: "me" intentionally excluded — too common as an English word (e.g. "looking at me")
 _KNOWN_PROVIDERS = (
     r'gmail|yahoo|hotmail|outlook|sbcglobal|aol|icloud|comcast|verizon|att|live|msn'
 )
 
-# Pattern A – spelled-out / NATO-phonetic username, then "at domain.tld"
 # Matches:  N-O-R-H, 1912, at gmail.com
 #           D-A-N-D-A-V-B. That is Victor Boyd, then R-E-D-D-Y, RomeoElephantDavidYellow, at gmail.com
 EMAIL_SPELLED = re.compile(
@@ -44,7 +42,6 @@ EMAIL_SPELLED = re.compile(
     re.IGNORECASE,
 )
 
-# Pattern A2 – spelled-out username, "at" + known provider name only (no TLD spoken)
 # Matches:  K-L-M, Kimer, K-I-M-E-R, at Gmail
 EMAIL_SPELLED_NOTLD = re.compile(
     r'(?:[A-Za-z]-)+[A-Za-z0-9]'
@@ -54,7 +51,6 @@ EMAIL_SPELLED_NOTLD = re.compile(
     re.IGNORECASE,
 )
 
-# Pattern B – plain username before "at domain.tld"
 # Matches:  Derek.J.Simmons at gmail.com
 #           dineshkisun37 at gmail.com
 EMAIL_SIMPLE = re.compile(
@@ -68,16 +64,13 @@ EMAIL_SIMPLE_NOTLD = re.compile(
     re.IGNORECASE,
 )
 
-# Pattern C – email-shaped token with a known provider (no "at" spoken)
 # Matches:  Gallegospeet.sbcglobal.net
 EMAIL_PROVIDER = re.compile(
     r'\b[\w.]+\.(?:' + _KNOWN_PROVIDERS + r')\.' + _TLD + r'\b',
     re.IGNORECASE,
 )
 
-# ---------------------------------------------------------------------------
 # Address pattern
-# ---------------------------------------------------------------------------
 
 _STREET_TYPES = (
     r'Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Court|Ct|Lane|Ln|'
@@ -98,9 +91,7 @@ ADDRESS = re.compile(
     re.IGNORECASE,
 )
 
-# ---------------------------------------------------------------------------
 # SSN patterns
-# ---------------------------------------------------------------------------
 
 # Full SSN: 912-81-3165  →  912-81-1234  (replace only last 4)
 SSN_FULL = re.compile(r'\b(\d{3}-\d{2}-)\d{4}\b')
@@ -126,9 +117,7 @@ SSN_LAST4_CONTEXT = re.compile(
     re.IGNORECASE,
 )
 
-# ---------------------------------------------------------------------------
 # Per-line redaction
-# ---------------------------------------------------------------------------
 
 def _redact_ssn_last4_context(line: str, log: list, filename: str, lineno: int) -> str:
     """Replace the 4-digit SSN in contextual matches, preserving surrounding text."""
@@ -180,10 +169,81 @@ def redact_line(line: str, log: list, filename: str, lineno: int) -> str:
     return line
 
 
-# ---------------------------------------------------------------------------
-# File processing
-# ---------------------------------------------------------------------------
+# Multi-line spoken email fallback
 
+_EMAIL_PROMPT = re.compile(r'\b(?:e-?mail)\b.*\baddress\b', re.IGNORECASE)
+
+
+def _extract_spoken_text(line: str) -> str:
+    """
+    Return transcript content without timestamp prefix.
+    Example:
+      [00:52 - 00:54]  It is F, like Fran,  ->  It is F, like Fran,
+    """
+    m = re.match(r'^\[[^\]]+\]\s*(.*)$', line)
+    return m.group(1) if m else line
+
+
+def _is_likely_email_fragment(text: str) -> bool:
+    s = text.strip().lower().rstrip('.')
+    if not s:
+        return False
+    if re.search(r'\b[a-z](?:-[a-z]){1,}\b', s):
+        return True
+    if re.search(r'\b(dot|at)\b', s):
+        return True
+    if 'like' in s and re.search(r'\b[a-z]\b', s):
+        return True
+    if re.fullmatch(r'[a-z0-9._%+-]{2,30}', s) and re.search(r'[0-9._%+-]', s):
+        return True
+    return False
+
+
+def _redact_multiline_email_fragments(lines: list[str], log: list, filename: str) -> list[str]:
+    """
+    If a line asks for an email address, redact likely spoken-email fragments
+    in the following few lines. This catches line-broken spell-outs that do not
+    include a single-line "at domain.tld" pattern.
+    """
+    out = lines[:]
+    i = 0
+    while i < len(out):
+        content = _extract_spoken_text(out[i])
+        if not _EMAIL_PROMPT.search(content):
+            i += 1
+            continue
+
+        # Look ahead a few lines for spoken email fragments.
+        for j in range(i + 1, min(i + 5, len(out))):
+            frag = _extract_spoken_text(out[j]).strip()
+            if not frag:
+                break
+            # Stop when we hit regular conversational text.
+            if not _is_likely_email_fragment(frag):
+                break
+
+            redacted_line = re.sub(r'(\[[^\]]+\]\s*).*$',
+                                   r'\1email@me.com',
+                                   out[j].rstrip('\n'))
+            # Preserve original newline if present.
+            if out[j].endswith('\n'):
+                redacted_line += '\n'
+            if redacted_line != out[j]:
+                log.append({
+                    'file': filename,
+                    'line': j + 1,
+                    'type': 'email_multiline',
+                    'original': out[j].rstrip('\n'),
+                    'replacement': redacted_line.rstrip('\n'),
+                })
+                out[j] = redacted_line
+
+        i += 1
+
+    return out
+
+
+# File processing
 def process_file(src: Path, dst: Path, log: list) -> None:
     with open(src, encoding='utf-8', errors='replace') as f:
         lines = f.readlines()
@@ -192,6 +252,7 @@ def process_file(src: Path, dst: Path, log: list) -> None:
         redact_line(line, log, src.name, i + 1)
         for i, line in enumerate(lines)
     ]
+    redacted = _redact_multiline_email_fragments(redacted, log, src.name)
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     with open(dst, 'w', encoding='utf-8') as f:
