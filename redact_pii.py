@@ -1,0 +1,231 @@
+"""
+PII redaction script for call transcripts.
+
+Replaces:
+  - Email addresses (including spelled-out / NATO-phonetic variants) → email@me.com
+  - Street addresses (house number + street name + type) → 123 Main Street
+    City, state, and ZIP are preserved.
+  - SSN last 4 digits → 1234
+    Full SSN (XXX-XX-XXXX) → last 4 replaced, e.g. XXX-XX-1234
+    Last-4-only in social context → 1234
+
+Output goes to call-transcriptions-redacted/.
+A CSV audit log is written to that folder as _redaction_log.csv.
+"""
+
+import re
+import csv
+from pathlib import Path
+
+INPUT_DIR  = Path(__file__).parent / "call-transcriptions"
+OUTPUT_DIR = Path(__file__).parent / "call-transcriptions-redacted"
+
+# ---------------------------------------------------------------------------
+# Email patterns
+# ---------------------------------------------------------------------------
+
+# Common TLDs spoken in calls
+_TLD = r'(?:com|net|org|edu|gov|io|co|us)'
+
+# Well-known provider names (catches emails dropped without "at", e.g. "gallegospeet.sbcglobal.net")
+# NOTE: "me" intentionally excluded — too common as an English word (e.g. "looking at me")
+_KNOWN_PROVIDERS = (
+    r'gmail|yahoo|hotmail|outlook|sbcglobal|aol|icloud|comcast|verizon|att|live|msn'
+)
+
+# Pattern A – spelled-out / NATO-phonetic username, then "at domain.tld"
+# Matches:  N-O-R-H, 1912, at gmail.com
+#           D-A-N-D-A-V-B. That is Victor Boyd, then R-E-D-D-Y, RomeoElephantDavidYellow, at gmail.com
+EMAIL_SPELLED = re.compile(
+    r'(?:[A-Za-z]-)+[A-Za-z0-9]'           # hyphenated letters: N-O-R-H  or D-A-N-D-A-V-B
+    r'(?:[.,\s][\w.,\s-]*?)?'              # optional explanation / extra chars (lazy)
+    r'\s+at\s+'                            # " at "
+    r'[\w][\w.\-]*\.' + _TLD + r'\b',
+    re.IGNORECASE,
+)
+
+# Pattern A2 – spelled-out username, "at" + known provider name only (no TLD spoken)
+# Matches:  K-L-M, Kimer, K-I-M-E-R, at Gmail
+EMAIL_SPELLED_NOTLD = re.compile(
+    r'(?:[A-Za-z]-)+[A-Za-z0-9]'
+    r'(?:[.,\s][\w.,\s-]*?)?'
+    r'\s+at\s+'
+    r'(?:' + _KNOWN_PROVIDERS + r')\b',
+    re.IGNORECASE,
+)
+
+# Pattern B – plain username before "at domain.tld"
+# Matches:  Derek.J.Simmons at gmail.com
+#           dineshkisun37 at gmail.com
+EMAIL_SIMPLE = re.compile(
+    r'\b[\w][\w.\-_+]*\s+at\s+[\w][\w.\-]*\.' + _TLD + r'\b',
+    re.IGNORECASE,
+)
+
+# Pattern B2 – plain username, "at" + known provider name only (no TLD spoken)
+EMAIL_SIMPLE_NOTLD = re.compile(
+    r'\b[\w][\w.\-_+]*\s+at\s+(?:' + _KNOWN_PROVIDERS + r')\b',
+    re.IGNORECASE,
+)
+
+# Pattern C – email-shaped token with a known provider (no "at" spoken)
+# Matches:  Gallegospeet.sbcglobal.net
+EMAIL_PROVIDER = re.compile(
+    r'\b[\w.]+\.(?:' + _KNOWN_PROVIDERS + r')\.' + _TLD + r'\b',
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# Address pattern
+# ---------------------------------------------------------------------------
+
+_STREET_TYPES = (
+    r'Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Court|Ct|Lane|Ln|'
+    r'Boulevard|Blvd|Way|Place|Pl|Circle|Cir|Terrace|Ter|'
+    r'Trail|Trl|Parkway|Pkwy|Highway|Hwy|Loop|Run|Pass'
+)
+
+# Matches: 5741 Carriage Court
+#          16345 East 101st Avenue
+#          23 Wild Oak Court
+#          16125, Guadalajara Court  (comma after number)
+# Replacement is "123 Main Street"; everything after (city/state/zip) is untouched.
+ADDRESS = re.compile(
+    r'\b\d+,?\s+'                                      # house number (optional comma after)
+    r'(?:(?:East|West|North|South|NE|NW|SE|SW)\s+)?'  # optional direction
+    r'\w[\w\s]*?'                                      # street name (lazy, word-start)
+    r'\s+(?:' + _STREET_TYPES + r')\b',               # whitespace required before type
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# SSN patterns
+# ---------------------------------------------------------------------------
+
+# Full SSN: 912-81-3165  →  912-81-1234  (replace only last 4)
+SSN_FULL = re.compile(r'\b(\d{3}-\d{2}-)\d{4}\b')
+
+# Last-4 only when "social" context is nearby on the same line.
+# Covers:
+#   "social security is 1381"
+#   "last four of your social? 2035"
+#   "9987 for social"
+#   "last 4 are 0543"
+SSN_LAST4_CONTEXT = re.compile(
+    r'(?:'
+    # "social [security] [number] [is/are/?] XXXX"  e.g. "social? 2035"  "social security is 1381"
+    # (?<!-) prevents matching the year in a date like 09-03-1986
+    r'social(?:\s+security)?(?:\s+number)?(?:\s+(?:is|are))?[,?\s]+(?<!-)(\d{4})\b'
+    r'|'
+    # "last [four/4] ... XXXX"  (allows punctuation like ? in the middle)
+    r'last\s+(?:four|4)(?:[\w\s,?!.]*?)(?<!-)(\d{4})\b'
+    r'|'
+    # "XXXX for social"
+    r'\b(?<!-)(\d{4})\s+for\s+social\b'
+    r')',
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# Per-line redaction
+# ---------------------------------------------------------------------------
+
+def _redact_ssn_last4_context(line: str, log: list, filename: str, lineno: int) -> str:
+    """Replace the 4-digit SSN in contextual matches, preserving surrounding text."""
+    def replacer(m):
+        # Find which capture group matched the 4 digits
+        digits = m.group(1) or m.group(2) or m.group(3)
+        original = m.group(0)
+        replaced = original.replace(digits, '1234', 1)
+        log.append({'file': filename, 'line': lineno, 'type': 'ssn_last4',
+                    'original': original, 'replacement': replaced})
+        return replaced
+    return SSN_LAST4_CONTEXT.sub(replacer, line)
+
+
+def redact_line(line: str, log: list, filename: str, lineno: int) -> str:
+    def log_and_replace(label: str, replacement: str):
+        def _replace(m):
+            log.append({
+                'file':        filename,
+                'line':        lineno,
+                'type':        label,
+                'original':    m.group(0),
+                'replacement': replacement,
+            })
+            return replacement
+        return _replace
+
+    def ssn_full_replace(m):
+        original = m.group(0)
+        replaced = m.group(1) + '1234'
+        log.append({'file': filename, 'line': lineno, 'type': 'ssn_full',
+                    'original': original, 'replacement': replaced})
+        return replaced
+
+    # Emails — order matters: spelled-out first (most specific), then simple, then provider-only
+    line = EMAIL_SPELLED.sub(log_and_replace('email_spelled',       'email@me.com'), line)
+    line = EMAIL_SPELLED_NOTLD.sub(log_and_replace('email_spelled', 'email@me.com'), line)
+    line = EMAIL_SIMPLE.sub(log_and_replace('email_simple',         'email@me.com'), line)
+    line = EMAIL_SIMPLE_NOTLD.sub(log_and_replace('email_simple',   'email@me.com'), line)
+    line = EMAIL_PROVIDER.sub(log_and_replace('email_provider',     'email@me.com'), line)
+
+    # Address
+    line = ADDRESS.sub(log_and_replace('address', '123 Main Street'), line)
+
+    # SSN — full format first, then contextual last-4
+    line = SSN_FULL.sub(ssn_full_replace, line)
+    line = _redact_ssn_last4_context(line, log, filename, lineno)
+
+    return line
+
+
+# ---------------------------------------------------------------------------
+# File processing
+# ---------------------------------------------------------------------------
+
+def process_file(src: Path, dst: Path, log: list) -> None:
+    with open(src, encoding='utf-8', errors='replace') as f:
+        lines = f.readlines()
+
+    redacted = [
+        redact_line(line, log, src.name, i + 1)
+        for i, line in enumerate(lines)
+    ]
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with open(dst, 'w', encoding='utf-8') as f:
+        f.writelines(redacted)
+
+
+def main() -> None:
+    OUTPUT_DIR.mkdir(exist_ok=True)
+
+    files = sorted(INPUT_DIR.glob('*.txt'))
+    print(f"Found {len(files)} transcript files.")
+
+    log: list[dict] = []
+
+    for src in files:
+        dst = OUTPUT_DIR / src.name
+        process_file(src, dst, log)
+
+    # Write audit CSV
+    log_path = OUTPUT_DIR / '_redaction_log.csv'
+    with open(log_path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=['file', 'line', 'type', 'original', 'replacement'])
+        writer.writeheader()
+        writer.writerows(log)
+
+    # Summary by type
+    from collections import Counter
+    by_type = Counter(r['type'] for r in log)
+    print(f"Done. {len(log)} replacements across {len(files)} files.")
+    for k, v in by_type.most_common():
+        print(f"  {k:20s} {v}")
+    print(f"Output : {OUTPUT_DIR}")
+    print(f"Audit  : {log_path}")
+
+
+if __name__ == '__main__':
+    main()
