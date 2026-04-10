@@ -144,6 +144,11 @@ PHONE_SPOKEN_DASHES = re.compile(
     r'\b\d(?:-\d){9}\b'
 )
 
+# Spoken digit-by-digit with spaces: 9 4 9 3 8 1 9 4 3 2  (exactly 10 digits)
+PHONE_SPOKEN_SPACES = re.compile(
+    r'\b\d(?:\s\d){9}\b'
+)
+
 # ---------------------------------------------------------------------------
 # Date of birth patterns
 # ---------------------------------------------------------------------------
@@ -197,6 +202,13 @@ _NAME_REQUEST = re.compile(
     r'|state\s+your\s+(?:full\s+)?names?'
     r')\b',
     re.IGNORECASE,
+)
+
+# Name appearing on same line as the request, after sentence-ending punctuation.
+# Only used when _NAME_REQUEST already matched the line.
+# Example: "May I have her first and last name? Shereece Anderson. I see."
+_NAME_AFTER_QUESTION = re.compile(
+    r'[?!]\s+([A-Z][a-z\']+(?:[-\s]+[A-Z][a-z\']+)+)'
 )
 
 # Inline name: "my name is First Last" or "first and last name is First Last"
@@ -337,6 +349,7 @@ def redact_line(line: str, log: list, filename: str, lineno: int) -> str:
     # ── Phone numbers ────────────────────────────────────────────────────────
     line = PHONE_FORMATTED.sub(log_and_replace('phone', '[PHONE]'), line)
     line = PHONE_SPOKEN_DASHES.sub(log_and_replace('phone_spoken', '[PHONE]'), line)
+    line = PHONE_SPOKEN_SPACES.sub(log_and_replace('phone_spoken_spaces', '[PHONE]'), line)
 
     # ── Dates of birth ───────────────────────────────────────────────────────
     # Combined DOB + SSN4 must be handled before standalone DOB so we can
@@ -380,6 +393,22 @@ def redact_line(line: str, log: list, filename: str, lineno: int) -> str:
                     'original': original, 'replacement': replaced})
         return replaced
     line = _NAME_INLINE.sub(name_inline_replace, line)
+
+    # Name on same line as the agent's name-request question:
+    # "May I have her first and last name? Shereece Anderson. I see."
+    if _NAME_REQUEST.search(line):
+        def name_after_q_replace(m):
+            name = m.group(1)
+            title_words = re.findall(r"\b[A-Z][a-z']{1,}\b", name)
+            name_words = [w for w in title_words if w.lower() not in _NAME_NONNAME_WORDS]
+            if len(name_words) < 2:
+                return m.group(0)
+            original = m.group(0)
+            replaced = original.replace(name, '[Name]', 1)
+            log.append({'file': filename, 'line': lineno, 'type': 'name_same_line',
+                        'original': original, 'replacement': replaced})
+            return replaced
+        line = _NAME_AFTER_QUESTION.sub(name_after_q_replace, line)
 
     return line
 

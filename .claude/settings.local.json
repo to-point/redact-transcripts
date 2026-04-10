@@ -14,7 +14,12 @@
       "Bash(python -m pytest test_redact_pii.py -v)",
       "Bash(python -m unittest test_redact_pii -v)",
       "Bash(python redact_pii.py)",
-      "Bash(xargs -I{} rm \"c:/Users/Taylor/Documents/Point/GitHub/redact-transcripts/call-transcriptions-redacted/{}\")"
+      "Bash(xargs -I{} rm \"c:/Users/Taylor/Documents/Point/GitHub/redact-transcripts/call-transcriptions-redacted/{}\")",
+      "Bash(grep -rhn \"\\\\b[0-9]\\\\{3,6\\\\} [A-Z][a-zA-Z ]* \\\\\\(Street\\\\|Avenue\\\\|Drive\\\\|Road\\\\|Court\\\\|Lane\\\\|Boulevard\\\\|Circle\\\\|Way\\\\|Place\\\\\\)\" \"c:/Users/Taylor/Documents/Point/GitHub/redact-transcripts/call-transcriptions-redacted/\")",
+      "Bash(awk -F: '{sum+=$2} END {print sum}')",
+      "Bash(python -m unittest -v)",
+      "Bash(zip -r \"point-call-transcripts-redacted-2026-04-10.zip\" *.txt _redaction_log.csv)",
+      "Bash(python -c ':*)"
     ]
   }
 }

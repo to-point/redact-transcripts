@@ -219,6 +219,24 @@ class PhoneTests(unittest.TestCase):
         )
         self.assertEqual(out, "So [PHONE] confirmed, [PHONE].\n")
 
+    def test_phone_spoken_spaces(self):
+        """Individual digits separated by spaces: 9 4 9 3 8 1 9 4 3 2"""
+        out = redact_line(
+            "best call back number please? 9 4 9 3 8 1 9 4 3 2. Okay.\n",
+            log=[], filename="x.txt", lineno=1,
+        )
+        self.assertIn("[PHONE]", out)
+        self.assertNotIn("9 4 9 3 8 1 9 4 3 2", out)
+
+    def test_phone_spoken_spaces_mid_sentence(self):
+        """Space-digit phone embedded mid-sentence."""
+        out = redact_line(
+            "[09:08 - 09:16] ma'am it's 9 4 9 3 8 1 9 4 3 2. Uh-huh.\n",
+            log=[], filename="x.txt", lineno=1,
+        )
+        self.assertIn("[PHONE]", out)
+        self.assertNotIn("9 4 9 3 8 1 9 4 3 2", out)
+
 
 # ---------------------------------------------------------------------------
 # Dates of birth
@@ -362,6 +380,24 @@ class NameTests(unittest.TestCase):
         ]
         out = _redact_multiline_names(lines, log=[], filename="x.txt")
         self.assertNotIn("[Name]", out[1])
+
+    def test_name_same_line_after_question(self):
+        """Name on same line as agent's name-request question."""
+        out = redact_line(
+            "[05:32 - 05:40] May I have her first and last name? Shereece Anderson. I see.\n",
+            log=[], filename="x.txt", lineno=1,
+        )
+        self.assertIn("[Name]", out)
+        self.assertNotIn("Shereece Anderson", out)
+
+    def test_name_same_line_filler_not_redacted(self):
+        """Common filler words after ? should not be mistaken for a name."""
+        out = redact_line(
+            "May I have your first and last name? Sure, go ahead.\n",
+            log=[], filename="x.txt", lineno=1,
+        )
+        # "Sure" is one word — should not be treated as a name
+        self.assertNotIn("[Name]", out)
 
 
 if __name__ == "__main__":
