@@ -40,3 +40,4 @@ Thumbs.db
 .env.*
 /call-transcriptions/
 /call-transcriptions-redacted/
+/archive/

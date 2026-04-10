@@ -9,21 +9,29 @@ This project redacts personally identifiable information (PII) from call transcr
 Keep the parts that make a transcript understandable and referenceable, and normalize sensitive values to safe placeholders.
 
 - Keep useful context:
-  - person names (when needed for transcript flow)
   - city/state
   - age
+  - call content and product discussion
 - Mask (write over) sensitive PII:
+  - customer names
+  - phone numbers
   - email addresses
-  - Social Security numbers (full SSN or last-4 in SSN context)
   - street addresses
+  - dates of birth
+  - Social Security numbers (full SSN or last-4 in SSN context)
 
 
 ## What gets replaced
 
-- Email -> `email@me.com`
-- Street address -> `123 Main Street` (city/state/ZIP context is preserved when present)
-- SSN full format `XXX-XX-XXXX` -> `XXX-XX-1234`
-- SSN last-4 in social-security context -> `1234`
+| PII type | Replacement |
+|---|---|
+| Customer name (in verification context) | `[Name]` |
+| Phone number (formatted or spoken digit-by-digit) | `[PHONE]` |
+| Email address | `email@me.com` |
+| Street address | `123 Main Street` (city/state/ZIP preserved) |
+| Date of birth | `[DOB]` |
+| SSN full format `XXX-XX-XXXX` | `XXX-XX-1234` |
+| SSN last-4 in social-security context | `1234` |
 
 ## Input and output
 

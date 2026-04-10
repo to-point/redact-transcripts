@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat \"c:/Users/Taylor/Documents/Point/GitHub/redact-transcripts/call-transcriptions/2026-03-01_New Customer - General FAQ_\"*.txt)",
+      "Bash(cat \"c:/Users/Taylor/Documents/Point/GitHub/redact-transcripts/call-transcriptions/2026-03-01_Product Call Completed_\"*.txt)",
+      "Bash(xargs -I{} sh -c 'echo \"=== {} ===\" && cat \"{}\"')",
+      "Bash(xargs -I{} sh -c 'echo \"=== {} ===\" && grep -n -A2 \"date of birth\\\\|your social\\\\|last four\\\\|last 4\" \"{}\"')",
+      "Bash(grep -v \"^--$\")",
+      "Bash(grep -v \"^--$\\\\|first and last name\\\\|Binary\\\\|^c:/\")",
+      "Bash(grep -v \"call back number\\\\|best call back\\\\|callback number\\\\|^--$\")",
+      "Bash(grep -v \"first and last name\\\\|^--$\")",
+      "Bash(python \"c:/Users/Taylor/Documents/Point/GitHub/redact-transcripts/redact_pii.py\")",
+      "Bash(grep -v \"^--$\\\\|first and last name\\\\|may I have your name\\\\|can I have your name\")",
+      "Bash(python -m pytest test_redact_pii.py -v)",
+      "Bash(python -m unittest test_redact_pii -v)",
+      "Bash(python redact_pii.py)",
+      "Bash(xargs -I{} rm \"c:/Users/Taylor/Documents/Point/GitHub/redact-transcripts/call-transcriptions-redacted/{}\")"
+    ]
+  }
+}
