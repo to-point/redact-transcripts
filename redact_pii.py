@@ -83,7 +83,8 @@ EMAIL_EMBEDDED_AT = re.compile(
 _STREET_TYPES = (
     r'Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Court|Ct|Lane|Ln|'
     r'Boulevard|Blvd|Way|Place|Pl|Circle|Cir|Terrace|Ter|'
-    r'Trail|Trl|Parkway|Pkwy|Highway|Hwy|Loop|Run|Pass'
+    r'Trail|Trl|Parkway|Pkwy|Highway|Hwy|Loop|Run|Pass|'
+    r'Alley|Aly|Pike|Ridge|Glen|Cove|Bend'
 )
 
 ADDRESS = re.compile(
@@ -91,6 +92,13 @@ ADDRESS = re.compile(
     r'(?:(?:East|West|North|South|E|W|N|S|NE|NW|SE|SW)\s+)?'
     r'\w[\w\s]*?'
     r'\s+(?:' + _STREET_TYPES + r')\b',
+    re.IGNORECASE,
+)
+
+# House number only at end of line: "My address is 2743."
+# The street name continues on the next line (handled by multiline pass).
+ADDRESS_TRAILING_NUMBER = re.compile(
+    r'(address\s+is\s+)\d[\d-]*[.,]?\s*$',
     re.IGNORECASE,
 )
 
@@ -267,7 +275,7 @@ def _is_likely_address_fragment(text: str) -> bool:
         return True
     if re.search(r'^(?:\d-){2,}\d\b', s):
         return True
-    if re.search(r'\b(?:street|st|avenue|ave|road|rd|drive|dr|court|ct|lane|ln|boulevard|blvd)\b', s):
+    if re.search(r'\b(?:street|st|avenue|ave|road|rd|drive|dr|court|ct|lane|ln|boulevard|blvd|alley|aly|pike|ridge|glen|cove|bend)\b', s):
         return True
     if re.search(r'\b[a-z](?:-[a-z]){1,}\b', s):
         return True
@@ -345,6 +353,14 @@ def redact_line(line: str, log: list, filename: str, lineno: int) -> str:
                     'original': original, 'replacement': replaced})
         return replaced
     line = ADDRESS_INLINE_AFTER_PROMPT.sub(address_inline_replace, line)
+
+    def address_trailing_replace(m):
+        original = m.group(0)
+        replaced = m.group(1) + '123 Main Street'
+        log.append({'file': filename, 'line': lineno, 'type': 'address_trailing_number',
+                    'original': original, 'replacement': replaced})
+        return replaced
+    line = ADDRESS_TRAILING_NUMBER.sub(address_trailing_replace, line)
 
     # ── Phone numbers ────────────────────────────────────────────────────────
     line = PHONE_FORMATTED.sub(log_and_replace('phone', '[PHONE]'), line)
@@ -441,7 +457,7 @@ def _redact_multiline_address_fragments(lines: list[str], log: list, filename: s
         for j in range(i + 1, min(i + 7, len(out))):
             frag = _extract_spoken_text(out[j]).strip()
             if not frag:
-                break
+                continue  # blank lines between transcript segments are common
             if _ADDRESS_STOP.search(frag):
                 break
             if re.search(r'\bcity\s+is\b|\bstate\b|\bzip\b|\bpostal\b', frag, re.IGNORECASE):
