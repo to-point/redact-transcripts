@@ -54,6 +54,14 @@ python redact_pii.py
 
 The script processes all transcript `.txt` files, writes redacted copies, and generates a CSV audit trail of replacements.
 
+## Zip redacted output
+
+```bash
+python zip_redacted.py
+```
+
+Packages all `.txt` files from `call-transcriptions-redacted/` into a dated zip named `TopofFunnelCallsMarch-2026-Redacted-YYYYMMDD.zip`, saved to `call-transcription-redacted-zips/` (created automatically if needed). The audit CSV is not included.
+
 ## Run tests
 
 ```bash

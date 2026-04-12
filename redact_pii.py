@@ -605,7 +605,12 @@ def process_file(src: Path, dst: Path, log: list) -> None:
 
 
 def main() -> None:
-    OUTPUT_DIR.mkdir(exist_ok=True)
+    from datetime import datetime
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    # Redacted .txt files go into a timestamped subdirectory
+    run_dir = OUTPUT_DIR / timestamp
+    run_dir.mkdir(parents=True, exist_ok=True)
 
     files = sorted(INPUT_DIR.glob('*.txt'))
     print(f"Found {len(files)} transcript files.")
@@ -613,10 +618,11 @@ def main() -> None:
     log: list[dict] = []
 
     for src in files:
-        dst = OUTPUT_DIR / src.name
+        dst = run_dir / src.name
         process_file(src, dst, log)
 
-    log_path = OUTPUT_DIR / '_redaction_log.csv'
+    # Audit CSV stays in OUTPUT_DIR (not the timestamped subdir), named with the same timestamp
+    log_path = OUTPUT_DIR / f'_redaction_log_{timestamp}.csv'
     with open(log_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=['file', 'line', 'type', 'original', 'replacement'])
         writer.writeheader()
@@ -627,7 +633,7 @@ def main() -> None:
     print(f"Done. {len(log)} replacements across {len(files)} files.")
     for k, v in by_type.most_common():
         print(f"  {k:25s} {v}")
-    print(f"Output : {OUTPUT_DIR}")
+    print(f"Output : {run_dir}")
     print(f"Audit  : {log_path}")
 
 

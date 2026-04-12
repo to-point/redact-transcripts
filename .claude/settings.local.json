@@ -20,7 +20,8 @@
       "Bash(python -m unittest -v)",
       "Bash(zip -r \"point-call-transcripts-redacted-2026-04-10.zip\" *.txt _redaction_log.csv)",
       "Bash(python -c ':*)",
-      "Bash(python zip_redacted.py)"
+      "Bash(python zip_redacted.py)",
+      "Bash(ls \"c:/Users/Taylor/Documents/Point/GitHub/redact-transcripts/call-transcriptions-redacted/\"*.txt)"
     ]
   }
 }
