@@ -19,7 +19,8 @@
       "Bash(awk -F: '{sum+=$2} END {print sum}')",
       "Bash(python -m unittest -v)",
       "Bash(zip -r \"point-call-transcripts-redacted-2026-04-10.zip\" *.txt _redaction_log.csv)",
-      "Bash(python -c ':*)"
+      "Bash(python -c ':*)",
+      "Bash(python zip_redacted.py)"
     ]
   }
 }
