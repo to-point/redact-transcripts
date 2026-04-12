@@ -33,6 +33,25 @@ Keep the parts that make a transcript understandable and referenceable, and norm
 | SSN full format `XXX-XX-XXXX` | `XXX-XX-1234` |
 | SSN last-4 in social-security context | `1234` |
 
+## Directory structure
+
+```
+redact-transcripts/
+├── redact_pii.py                          # main redaction script
+├── zip_redacted.py                        # packages a run into a named zip
+├── test_redact_pii.py                     # unit tests
+│
+├── call-transcriptions/                   # input: source .txt transcripts (gitignored)
+│
+├── call-transcriptions-redacted/          # output root (gitignored)
+│   ├── _redaction_log_<timestamp>.csv     # audit trail of every replacement
+│   └── <timestamp>/                       # one subdir per redaction run
+│       └── *.txt                          # redacted transcripts
+│
+├── call-transcription-redacted-zips/      # dated zips for sharing (gitignored)
+└── archive/                               # old datasets (gitignored)
+```
+
 ## Input and output
 
 - Input transcripts: `call-transcriptions/*.txt`
